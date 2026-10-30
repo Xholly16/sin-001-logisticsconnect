@@ -2,15 +2,19 @@ package co.wethinkcode.logisticsconnect;
 
 import io.javalin.Javalin;
 
+import java.util.List;
+
 public class IngestionServiceApp {
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
+        List<String[]> rawRows = HubCsvLoader.load("/hubs-global.csv");
+        List<Hub> hubs = HubCleaner.clean(rawRows);
+        System.out.println("Cleaned " + rawRows.size() + " rows into " + hubs.size() + " hubs");
+
         Javalin app = Javalin.create().start(7050);
 
         app.get("/health", ctx -> ctx.result("OK"));
 
-        // TODO: read and clean src/main/resources/hubs-global.csv (hubs, sorting centers, regional districts data —
-        // trim whitespace, fix casing, normalize dates/booleans) and expose the
-        // cleaned records here for the other services to consume.
+        app.get("/hubs", ctx -> ctx.json(hubs));
     }
 }

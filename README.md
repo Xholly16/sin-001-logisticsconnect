@@ -27,7 +27,7 @@ its own Maven project (no parent pom). Requirements: Java 17+, Maven 3.8+, Docke
 
 | Service | Folder | Port | Role |
 |---|---|---|---|
-| ingestion-service | `ingestion-service/` | 7050 | Should clean `hubs-global.csv` (see Status) |
+| ingestion-service | `ingestion-service/` | 7050 | Cleans `hubs-global.csv`, merges duplicate hubs, serves them at `GET /hubs` |
 | hub-service | `hub-service/` | 7051 | Hubs, sorting centers and provinces; resolves hub aliases |
 | delay-stage-service | `delay-stage-service/` | 7052 | Tracks each hub's delay stage (0-8) and publishes changes |
 | transit-service | `transit-service/` | 7053 | Calculates ETA windows from hub data and delay stage |
@@ -38,17 +38,18 @@ its own Maven project (no parent pom). Requirements: Java 17+, Maven 3.8+, Docke
 
 | Stage | State |
 |---|---|
-| 1. Clean `hubs-global.csv` | NOT DONE. `ingestion-service` only exposes `/health`. `hub-service` tries `GET :7050/hubs` at startup and falls back to two built-in sample hubs (H-500, H-501). |
+| 1. Clean `hubs-global.csv` | Done: 18 raw rows become 10 hubs. ingestion-service serves them at `GET :7050/hubs` and hub-service loads them at startup. |
 | 2. REST services | Done: hub-service, delay-stage-service and transit-service all expose real endpoints. |
 | 3. MQ decoupling | Done: delay-stage-service publishes, transit-service subscribes. The REST call between them was removed. |
 | 4. AlertBot (stretch) | Done: alerts when a hub's stage rises to 5 or above. |
 
 ## Run
 
-Open one terminal per service, from the project root. Start the broker first.
+Open one terminal per service, from the project root. Start the broker first, and ingestion-service before hub-service (hub-service loads its hubs from it at startup).
 
     docker compose -f common/docker-compose.yml up -d
 
+    cd ingestion-service && mvn -q package && java -jar target/ingestion-service.jar
     cd hub-service && mvn -q package && java -jar target/hub-service.jar
     cd delay-stage-service && mvn -q package && java -jar target/delay-stage-service.jar
     cd transit-service && mvn -q package && java -jar target/transit-service.jar
@@ -106,6 +107,17 @@ that update (a warning is logged). The connection is rebuilt on the next publish
 (5) to the threshold or above, so stages 6, 7 and 8 do not repeat the alert. The "post" is a log
 line and an entry in `/alerts`; a real version would call a social API or webhook there.
 
+**Duplicate hubs (ingestion-service).** The CSV lists the same real hub under several IDs (H-500,
+H-504, H-510 and H-515 are all Johannesburg Central). After cleaning, two rows are the same hub when
+they have the same sorting center in the same province; a row with a blank province joins its
+center's province when that center only appears in one. The lowest ID is kept as the hub's ID and
+the others become `aliases`, which hub-service already resolves, so old IDs keep working
+(`GET /eta/H-504` answers for hub H-500). When duplicates disagree on `active`, the majority wins,
+and on a tie the newest (highest ID) record wins. That is a judgment call: a hub one duplicate
+reports as inactive might really be closed, so a person should confirm those cases. Province
+spellings such as `Kwa-Zulu Natal` and `KwaZulu Natal` map to one official name, and placeholders
+(`N/A`, `unknown`, blank) become null instead of being guessed.
+
 ## Known limitations
 
 - Stages are held in memory, so delay-stage-service forgets everything on restart.
@@ -114,12 +126,12 @@ line and an entry in `/alerts`; a real version would call a social API or webhoo
 - `MqConfig` and `StageEvent` are copied into each service because there is no shared module.
 - Ports and the broker URL are hard-coded.
 - `HttpClient` calls in transit-service have no timeout or retry.
-- Stage 1 (CSV cleaning and duplicate handling) is not implemented yet.
+- Duplicate detection needs the same sorting-center name (after cleaning) in the same province, so a differently spelled name would be missed.
 
 ## With more time
 
-- Implement ingestion-service and decide a duplicate strategy (for example, merge rows that
-  normalise to the same hub ID and keep the most complete record).
+- Add fuzzy matching for near-miss sorting-center names, and flag merges where duplicates
+  disagree on active status for a human to confirm.
 - Fix the cold start with a durable subscription, or have transit-service fetch current stages
   once at startup.
 - Persist stages, move config to environment variables, and add a shared module for the
