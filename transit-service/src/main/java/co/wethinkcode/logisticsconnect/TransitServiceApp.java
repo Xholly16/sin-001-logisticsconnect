@@ -16,7 +16,15 @@ public class TransitServiceApp {
 
     public static void main(String[] args) throws Exception {
         HubClient hubs = new HubClient();
-        StageSource stages = new DelayStageClient();
+        MqStageSource mqStages = new MqStageSource();
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                mqStages.close();
+            } catch (Exception ignored) {
+                // shutting down anyway
+            }
+        }));
+        StageSource stages = mqStages;
 
         Javalin app = Javalin.create().start(7053);
 
